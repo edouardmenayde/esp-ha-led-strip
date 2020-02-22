@@ -1,9 +1,11 @@
 ## ESP8266 LED-Strip Firmware for Home-Assistant 
 
+It is a fork of [https://github.com/schmic/esp-ha-led-strip](https://github.com/schmic/esp-ha-led-strip) updated and modified to suit my needs.
+
 Attention, don't break the single-double-quotes for the defines in the platformio.ini!
 
 ### What you need
-- ESP8266 (Wemos D1 Mini or similar)
+- ESP8266 (nodemcuv2 or similar)
 - WS2812b based LED stripe
     - sufficient power supply, every led draws up to 60mA
 

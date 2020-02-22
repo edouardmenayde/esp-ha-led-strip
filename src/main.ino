@@ -6,6 +6,8 @@
 #include <WS2812FX.h>
 #include <PubSubClient.h>
 
+#include "secrets.h"
+
 const char *_ssid = WIFI_SSID;
 const char *_password = WIFI_PASS;
 
