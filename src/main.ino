@@ -33,53 +33,53 @@ uint32_t getColorInt()
 
 void mqttProcessJson(char *message)
 {
-    StaticJsonBuffer<_mqtt_buffer_size> jsonBuffer;
-    JsonObject &root = jsonBuffer.parseObject(message);
+    StaticJsonDocument<_mqtt_buffer_size> jsonDoc;
+    auto error = deserializeJson(jsonDoc, message);
 
-    if (!root.success())
+    if (error)
     {
         return;
     }
 
-    if (root.containsKey("state"))
+    if (jsonDoc.containsKey("state"))
     {
-        if (strcmp(root["state"], "ON") == 0)
+        if (strcmp(jsonDoc["state"], "ON") == 0)
         {
             ws2812fx.start();
         }
-        else if (strcmp(root["state"], "OFF") == 0)
+        else if (strcmp(jsonDoc["state"], "OFF") == 0)
         {
             ws2812fx.stop();
         }
     }
 
-    if (root.containsKey("effect"))
+    if (jsonDoc.containsKey("effect"))
     {
-        ws2812fx.setMode(effectNumber(root["effect"]));
+        ws2812fx.setMode(effectNumber(jsonDoc["effect"]));
     }
 
-    if (root.containsKey("color"))
+    if (jsonDoc.containsKey("color"))
     {
-        red = root["color"]["r"];
-        green = root["color"]["g"];
-        blue = root["color"]["b"];
+        red = jsonDoc["color"]["r"];
+        green = jsonDoc["color"]["g"];
+        blue = jsonDoc["color"]["b"];
         ws2812fx.setColor(getColorInt());
     }
 
-    if (root.containsKey("white_value"))
+    if (jsonDoc.containsKey("white_value"))
     {
-        white = root["white_value"];
+        white = jsonDoc["white_value"];
         ws2812fx.setColor(getColorInt());
     }
 
-    if (root.containsKey("brightness"))
+    if (jsonDoc.containsKey("brightness"))
     {
-        ws2812fx.setBrightness(root["brightness"]);
+        ws2812fx.setBrightness(jsonDoc["brightness"]);
     }
 
-    if (root.containsKey("speed"))
+    if (jsonDoc.containsKey("speed"))
     {
-        ws2812fx.setSpeed(root["speed"]);
+        ws2812fx.setSpeed(jsonDoc["speed"]);
     }
 }
 
@@ -89,8 +89,7 @@ void mqttSendState()
     const char *_off_cmd = "OFF";
     String _mqtt_state_topic = "leds/" + String(_id) + "/state";
 
-    StaticJsonBuffer<_mqtt_buffer_size> jsonBuffer;
-    JsonObject &root = jsonBuffer.createObject();
+    StaticJsonDocument<_mqtt_buffer_size> root;
 
     root["state"] = (ws2812fx.isRunning()) ? _on_cmd : _off_cmd;
     if (ws2812fx.isRunning())
@@ -99,16 +98,15 @@ void mqttSendState()
         root["brightness"] = ws2812fx.getBrightness();
         root["effect"] = ws2812fx.getModeName(ws2812fx.getMode());
         root["speed"] = ws2812fx.getSpeed();
-        JsonObject &color = root.createNestedObject("color");
+        JsonObject color = root.createNestedObject("color");
         color["r"] = red;
         color["g"] = green;
         color["b"] = blue;
         color.end();
     }
-    root.end();
 
-    char *buffer = new char[root.measureLength() + 1];
-    root.printTo(buffer, root.measureLength() + 1);
+    char *buffer = new char[root.size() + 1];
+    serializeJson(root, buffer, root.size() + 1);
  
     mqtt.publish(_mqtt_state_topic.c_str(), buffer);
     Serial.print("- Send State: ");
@@ -162,7 +160,7 @@ int effectNumber(String effect)
         effects[i] = ws2812fx.getModeName(i);
     }
     int effectNo = -1;
-    for (int i = 0; i < MODE_COUNT; i++)
+    for (unsigned int i = 0; i < MODE_COUNT; i++)
     {
         if (effect == effects[i])
         {
@@ -268,7 +266,7 @@ void loop()
     ws2812fx.service();
     if (!mqtt.connected())
     {
-        // TODO: Wait 5 seconds before retrying
+        delay(5000);
         mqttConnect();
     }
 }
