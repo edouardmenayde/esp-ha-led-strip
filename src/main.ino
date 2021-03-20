@@ -4,174 +4,162 @@
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h>
 #include <WS2812FX.h>
-#include <PubSubClient.h>
+#include <EasyButton.h>
+#include <arduino_homekit_server.h>
 
 #include "secrets.h"
 
-const char *_ssid = WIFI_SSID;
-const char *_password = WIFI_PASS;
+//access the config defined in C code
 
-const char *_mqtt_server = MQTT_SERVER;
-const int _mqtt_port = MQTT_PORT;
-const int _mqtt_buffer_size = JSON_OBJECT_SIZE(64);
+extern "C" homekit_server_config_t accessory_config;
+extern "C" homekit_characteristic_t cha_on;
+extern "C" homekit_characteristic_t cha_bright;
+extern "C" homekit_characteristic_t cha_sat;
+extern "C" homekit_characteristic_t cha_hue;
 
 char _id[12];
 char _hostname[18] = HOSTNAME_PREFIX;
 
 WS2812FX ws2812fx = WS2812FX(LED_COUNT, LED_PIN, NEO_RGB + NEO_KHZ800);
 WiFiClient wifi;
-PubSubClient mqtt(wifi);
 
-// Maintained state for reporting to HA
-byte red = 0;
-byte green = 123;
-byte blue = 255;
-byte white = 255;
+EasyButton reset_homekit(BUTTON_PIN);
 
-uint32_t getColorInt()
+// Maintained state
+bool received_sat = false;
+bool received_hue = false;
+
+bool is_on = false;
+float current_brightness = 100.0;
+float current_sat = 0.0;
+float current_hue = 0.0;
+int rgb_colors[3] = {0, 0, 0};
+
+void set_on(const homekit_value_t v)
 {
-    return ((uint32_t)white << 24) | ((uint32_t)green << 16) | ((uint32_t)red << 8) | blue;
+  bool on = v.bool_value;
+  cha_on.value.bool_value = on; //sync the value
+
+  if (on) {
+    is_on = true;
+    Serial.println("On");
+  }
+  else {
+    is_on = false;
+    Serial.println("Off");
+  }
+
+  updateColor();
 }
 
-void mqttProcessJson(char *message)
+void set_hue(const homekit_value_t v)
 {
-    StaticJsonDocument<_mqtt_buffer_size> jsonDoc;
-    auto error = deserializeJson(jsonDoc, message);
+  Serial.println("set_hue");
+  float hue = v.float_value;
+  cha_hue.value.float_value = hue; //sync the value
 
-    if (error)
-    {
-        return;
-    }
+  current_hue = hue;
+  received_hue = true;
 
-    if (jsonDoc.containsKey("state"))
-    {
-        if (strcmp(jsonDoc["state"], "ON") == 0)
-        {
-            ws2812fx.start();
-        }
-        else if (strcmp(jsonDoc["state"], "OFF") == 0)
-        {
-            ws2812fx.stop();
-        }
-    }
-
-    if (jsonDoc.containsKey("effect"))
-    {
-        ws2812fx.setMode(effectNumber(jsonDoc["effect"]));
-    }
-
-    if (jsonDoc.containsKey("color"))
-    {
-        red = jsonDoc["color"]["r"];
-        green = jsonDoc["color"]["g"];
-        blue = jsonDoc["color"]["b"];
-        ws2812fx.setColor(getColorInt());
-    }
-
-    if (jsonDoc.containsKey("white_value"))
-    {
-        white = jsonDoc["white_value"];
-        ws2812fx.setColor(getColorInt());
-    }
-
-    if (jsonDoc.containsKey("brightness"))
-    {
-        ws2812fx.setBrightness(jsonDoc["brightness"]);
-    }
-
-    if (jsonDoc.containsKey("speed"))
-    {
-        ws2812fx.setSpeed(jsonDoc["speed"]);
-    }
+  updateColor();
 }
 
-void mqttSendState()
+void set_sat(const homekit_value_t v)
 {
-    const char *_on_cmd = "ON";
-    const char *_off_cmd = "OFF";
-    String _mqtt_state_topic = "leds/" + String(_id) + "/state";
+  Serial.println("set_sat");
+  float sat = v.float_value;
+  cha_sat.value.float_value = sat; //sync the value
 
-    StaticJsonDocument<_mqtt_buffer_size> root;
+  current_sat = sat;
+  received_sat = true;
 
-    root["state"] = (ws2812fx.isRunning()) ? _on_cmd : _off_cmd;
-    if (ws2812fx.isRunning())
-    {
-        root["white_value"] = white;
-        root["brightness"] = ws2812fx.getBrightness();
-        root["effect"] = ws2812fx.getModeName(ws2812fx.getMode());
-        root["speed"] = ws2812fx.getSpeed();
-        JsonObject color = root.createNestedObject("color");
-        color["r"] = red;
-        color["g"] = green;
-        color["b"] = blue;
-        color.end();
-    }
-
-    char *buffer = new char[root.size() + 1];
-    serializeJson(root, buffer, root.size() + 1);
- 
-    mqtt.publish(_mqtt_state_topic.c_str(), buffer);
-    Serial.print("- Send State: ");
-    Serial.println(buffer);
-    delete buffer;
+  updateColor();
 }
 
-void mqttCallback(char *topic, byte *payload, unsigned int length)
+void set_bright(const homekit_value_t v)
 {
-    Serial.print("Message arrived [");
-    Serial.print(topic);
-    Serial.print("] ");
+  Serial.println("set_bright");
+  int bright = v.int_value;
+  cha_bright.value.int_value = bright; //sync the value
 
-    char message[length + 1];
-    for (unsigned i = 0; i < length; i++)
-    {
-        message[i] = (char)payload[i];
-    }
-    message[length] = '\0';
-    Serial.println(message);
+  current_brightness = bright;
 
-    mqttProcessJson(message);
-    mqttSendState();
+  updateColor();
 }
 
-void mqttConnect()
+void updateColor()
 {
-    const char *_on_avail = "Online";
-    const char *_off_avail = "Offline";
-    String _mqtt_avail_topic = "leds/" + String(_id) + "/lwt";
-    String _mqtt_cmd_topic = "leds/" + String(_id) + "/cmd";
+  if (is_on)
+  {
+    if (received_hue && received_sat) {
+      HSV2RGB(current_hue, current_sat, current_brightness);
+      received_hue = false;
+      received_sat = false;
+    }
 
-    if (mqtt.connect(_hostname, _mqtt_avail_topic.c_str(), 1, true, _off_avail))
-    {
-        Serial.printf("MQTT: connected as %s\r\n", _hostname);
-        mqtt.publish(_mqtt_avail_topic.c_str(), _on_avail, true);
-        mqtt.subscribe(_mqtt_cmd_topic.c_str());
-        mqttSendState();
-    }
-    else
-    {
-        Serial.printf("failed, rc=%d \n", mqtt.state());
-    }
+    int b = map(current_brightness, 0, 100, 75, 255);
+    Serial.println(b);
+
+    ws2812fx.setBrightness(b);
+    ws2812fx.setColor(rgb_colors[0], rgb_colors[1], rgb_colors[2]);
+    ws2812fx.start();
+  }
+  else {
+    ws2812fx.stop();
+  }
 }
 
-int effectNumber(String effect)
-{
-    String effects[MODE_COUNT];
-    for (uint8_t i = 0; i < ws2812fx.getModeCount(); i++)
-    {
-        effects[i] = ws2812fx.getModeName(i);
-    }
-    int effectNo = -1;
-    for (unsigned int i = 0; i < MODE_COUNT; i++)
-    {
-        if (effect == effects[i])
-        {
-            effectNo = i;
-            break;
-        }
-    }
-    return effectNo;
-}
+// void mqttProcessJson(char *message)
+// {
+//     StaticJsonDocument<_mqtt_buffer_size> jsonDoc;
+//     auto error = deserializeJson(jsonDoc, message);
+
+//     if (error)
+//     {
+//         return;
+//     }
+
+//     if (jsonDoc.containsKey("state"))
+//     {
+//         if (strcmp(jsonDoc["state"], "ON") == 0)
+//         {
+//             ws2812fx.start();
+//         }
+//         else if (strcmp(jsonDoc["state"], "OFF") == 0)
+//         {
+//             ws2812fx.stop();
+//         }
+//     }
+
+//     if (jsonDoc.containsKey("effect"))
+//     {
+//         ws2812fx.setMode(effectNumber(jsonDoc["effect"]));
+//     }
+
+//     if (jsonDoc.containsKey("color"))
+//     {
+//         red = jsonDoc["color"]["r"];
+//         green = jsonDoc["color"]["g"];
+//         blue = jsonDoc["color"]["b"];
+//         ws2812fx.setColor(getColorInt());
+//     }
+
+//     if (jsonDoc.containsKey("white_value"))
+//     {
+//         white = jsonDoc["white_value"];
+//         ws2812fx.setColor(getColorInt());
+//     }
+
+//     if (jsonDoc.containsKey("brightness"))
+//     {
+//         ws2812fx.setBrightness(jsonDoc["brightness"]);
+//     }
+
+//     if (jsonDoc.containsKey("speed"))
+//     {
+//         ws2812fx.setSpeed(jsonDoc["speed"]);
+//     }
+// }
 
 void setupOTA()
 {
@@ -210,8 +198,8 @@ void setupOTA()
 void setupWifi()
 {
     WiFi.hostname(_hostname);
-    WiFi.begin(_ssid, _password);
-    Serial.printf("Connecting to %s (%s) ", _ssid, _id);
+    WiFi.begin(WIFI_SSID, WIFI_PW);
+    Serial.printf("Connecting to %s (%s) ", WIFI_SSID, _id);
     while (WiFi.status() != WL_CONNECTED)
     {
         delay(100);
@@ -225,21 +213,25 @@ void setupWifi()
     Serial.println();
 }
 
-void setupMQTT()
-{
-    mqtt.setServer(_mqtt_server, _mqtt_port);
-    mqtt.setCallback(mqttCallback);
-    mqttConnect();
-}
-
 void setupFX()
 {
     ws2812fx.init();
-    ws2812fx.setBrightness(66);
+    ws2812fx.setBrightness(100);
     ws2812fx.setSpeed(1024);
-    ws2812fx.setColor(getColorInt());
-    ws2812fx.setMode(FX_MODE_RAINBOW_CYCLE);
+    ws2812fx.setColor(rgb_colors[0], rgb_colors[1], rgb_colors[2]);
+    ws2812fx.setMode(FX_MODE_STATIC);
+    ws2812fx.start();
     Serial.println("FX: ready");
+}
+
+void homekit_setup()
+{
+  cha_on.setter = set_on;
+  cha_bright.setter = set_bright;
+  cha_sat.setter = set_sat;
+  cha_hue.setter = set_hue;
+
+  arduino_homekit_setup(&accessory_config);
 }
 
 void setup()
@@ -256,7 +248,9 @@ void setup()
     setupWifi();
     setupOTA();
     setupFX();
-    setupMQTT();
+    homekit_setup();
+
+    reset_homekit.onPressed(homekit_storage_reset);
 
     Serial.println();
 }
@@ -264,11 +258,76 @@ void setup()
 void loop()
 {
     ArduinoOTA.handle();
-    mqtt.loop();
     ws2812fx.service();
-    if (!mqtt.connected())
-    {
-        delay(5000);
-        mqttConnect();
-    }
+    arduino_homekit_loop();
+    reset_homekit.read();
+}
+
+void HSV2RGB(float h, float s, float v)
+{
+
+  int i;
+  float m, n, f;
+
+  s /= 100;
+  v /= 100;
+
+  if (s == 0)
+  {
+    rgb_colors[0] = rgb_colors[1] = rgb_colors[2] = round(v * 255);
+    return;
+  }
+
+  h /= 60;
+  i = floor(h);
+  f = h - i;
+
+  if (!(i & 1))
+  {
+    f = 1 - f;
+  }
+
+  m = v * (1 - s);
+  n = v * (1 - s * f);
+
+  switch (i)
+  {
+
+  case 0:
+  case 6:
+    rgb_colors[0] = round(v * 255);
+    rgb_colors[1] = round(n * 255);
+    rgb_colors[2] = round(m * 255);
+    break;
+
+  case 1:
+    rgb_colors[0] = round(n * 255);
+    rgb_colors[1] = round(v * 255);
+    rgb_colors[2] = round(m * 255);
+    break;
+
+  case 2:
+    rgb_colors[0] = round(m * 255);
+    rgb_colors[1] = round(v * 255);
+    rgb_colors[2] = round(n * 255);
+    break;
+
+  case 3:
+    rgb_colors[0] = round(m * 255);
+    rgb_colors[1] = round(n * 255);
+    rgb_colors[2] = round(v * 255);
+    break;
+
+  case 4:
+    rgb_colors[0] = round(n * 255);
+    rgb_colors[1] = round(m * 255);
+    rgb_colors[2] = round(v * 255);
+    break;
+
+  case 5:
+    rgb_colors[0] = round(v * 255);
+    rgb_colors[1] = round(m * 255);
+    rgb_colors[2] = round(n * 255);
+    break;
+  }
 }

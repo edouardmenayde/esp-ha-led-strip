@@ -1,2 +1,2 @@
-#define WIFI_PASS blabla
 #define WIFI_SSID blabla
+#define WIFI_PW blabla
