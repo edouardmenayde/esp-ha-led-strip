@@ -14,20 +14,32 @@ char _hostname[18] = HOSTNAME_PREFIX;
 WS2812FX ws2812fx = WS2812FX(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 ESP8266WebServer server(80);
 WiFiClient client;
+
+IPAddress staticIP(192, 168, 1, 110);
+IPAddress gateway(192, 168, 1, 254); 
+IPAddress subnet(255, 255, 255, 0);
+IPAddress dns(8, 8, 8, 8);
+
 bool is_on = false;
-int red, green, blue = 0;
-String hexColor;
+int red = 255;
+int green = 0;
+int blue = 0;
+String hexColor = "#FF0000";
 
 void start()
 {
-  ws2812fx.start();
+  Serial.println("start");
+  ws2812fx.setBrightness(computeBrightness());
+  ws2812fx.show();
   is_on = true;
   server.send(200, "text/plain", "Start");
 }
 
 void stop()
 {
-  ws2812fx.stop();
+  Serial.println("stop");
+  ws2812fx.setBrightness(0);
+  ws2812fx.show();
   is_on = false;
   server.send(200, "text/plain", "Stop");
 }
@@ -53,7 +65,7 @@ void getColor()
   server.send(200, "text/plain", hexColor);
 }
 
-void getColor()
+void getBrightness()
 {
   server.send(200, "text/plain", String(computeBrightness()));
 }
@@ -111,6 +123,7 @@ void setupOTA()
 void setupWifi()
 {
   WiFi.hostname(_hostname);
+  WiFi.config(staticIP, subnet, gateway, dns);
   WiFi.begin(WIFI_SSID, WIFI_PW);
   Serial.printf("Connecting to %s (%s) ", WIFI_SSID, _id);
   while (WiFi.status() != WL_CONNECTED)
